@@ -1,0 +1,57 @@
+[
+    {
+        "event": "login",
+        "user": "alice_admin",
+        "result": "success",
+        "timestamp": "2026-09-10 23:02:21",
+        "args": [],
+        "kwargs": {
+            "username": "alice_admin",
+            "password": "Secur3P@ssw0rd!"
+        }
+    },
+    {
+        "event": "login",
+        "user": "bob_analyst",
+        "result": "failure",
+        "timestamp": "2026-09-10 23:02:21",
+        "args": [],
+        "kwargs": {
+            "username": "bob_analyst",
+            "password": "WrongPassword123"
+        }
+    },
+    {
+        "event": "login",
+        "user": "unknown_user",
+        "result": "failure",
+        "timestamp": "2026-09-10 23:02:21",
+        "args": [],
+        "kwargs": {
+            "username": "unknown_user",
+            "password": "SomeSecretPass1"
+        }
+    },
+    {
+        "event": "login",
+        "user": "carol_dev",
+        "result": "failure",
+        "timestamp": "2026-09-10 23:02:21",
+        "args": [],
+        "kwargs": {
+            "username": "carol_dev",
+            "password": "short"
+        }
+    },
+    {
+        "event": "login",
+        "user": "",
+        "result": "failure",
+        "timestamp": "2026-09-10 23:02:21",
+        "args": [],
+        "kwargs": {
+            "username": "",
+            "password": ""
+        }
+    }
+]
