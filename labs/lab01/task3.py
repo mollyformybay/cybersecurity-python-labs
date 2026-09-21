@@ -63,35 +63,48 @@ def log_event(func):
                     "%Y-%m-%d %H:%M:%S"
                 ),
             }
-            DATA_DIR.mkdir(parents=True, exist_ok=True)
-            logs = []
-            if LOG_FILE.exists():
-                try:
-                    logs = json.loads(LOG_FILE.read_text(encoding="utf-8"))
-                except (json.JSONDecodeError, OSError):
-                    logs = []
-            logs.append(entry)
-            LOG_FILE.write_text(
-                json.dumps(logs, indent=4, ensure_ascii=False), encoding="utf-8"
-            )
+            try:
+                DATA_DIR.mkdir(parents=True, exist_ok=True)
+                logs = []
+                if LOG_FILE.exists():
+                    try:
+                        logs = json.loads(LOG_FILE.read_text(encoding="utf-8"))
+                    except (json.JSONDecodeError, OSError):
+                        logs = []
+                logs.append(entry)
+                LOG_FILE.write_text(
+                    json.dumps(logs, indent=4, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+            except (FileNotFoundError, PermissionError, OSError) as err:
+                print(f"[Помилка запису логів]: {err}")
 
     return wrapper
 
 
 def create_users(users_list: tuple) -> None:
-    """Створює базу users.csv."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["username", "password_hash"])
-        for u, p in users_list:
-            writer.writerow([u, generate_hash(p, SALT)])
+    """Створює базу users.csv з індивідуальною обробкою винятків."""
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["username", "password_hash"])
+            for u, p in users_list:
+                writer.writerow([u, generate_hash(p, SALT)])
+    except (FileNotFoundError, PermissionError, OSError) as err:
+        print(f"[create_users] Помилка роботи з файлом: {err}")
+    except (ValidationError, ValueError) as err:
+        print(f"[create_users] Помилка валідації даних: {err}")
 
 
 def read_users_db() -> list[dict[str, str]]:
-    """Зчитує CSV-базу користувачів."""
-    with open(CSV_FILE, "r", encoding="utf-8") as f:
-        return list(csv.DictReader(f))
+    """Зчитує CSV-базу користувачів з автономною обробкою файлових винятків."""
+    try:
+        with open(CSV_FILE, "r", encoding="utf-8") as f:
+            return list(csv.DictReader(f))
+    except (FileNotFoundError, PermissionError, OSError) as err:
+        print(f"[read_users_db] Помилка зчитування бази: {err}")
+        return []
 
 
 @log_event
@@ -99,13 +112,16 @@ def login(username: str, password: str) -> bool:
     """Перевіряє автентифікацію користувача."""
     if not username or not password:
         raise ValueError("Логін та пароль не можуть бути порожніми.")
+
     try:
         pwd_hash = generate_hash(password, SALT)
     except ValidationError:
         return False
+
+    users_db = read_users_db()
     return any(
-        r["username"] == username and r["password_hash"] == pwd_hash
-        for r in read_users_db()
+        r.get("username") == username and r.get("password_hash") == pwd_hash
+        for r in users_db
     )
 
 
@@ -116,33 +132,31 @@ def main() -> None:
     print(f"SHA-1 | Сіль: {SALT} | Мін. довжина: {MIN_PASSWORD_LENGTH}")
     print("=" * 80)
 
+    create_users(USERS_TO_REGISTER)
+    db = read_users_db()
+    print(f"[+] Створено записів у CSV: {len(db)}")
+
+    test_cases = [
+        ("alice_admin", "Secur3P@ssw0rd!", "Вірний пароль"),
+        ("bob_analyst", "WrongPassword123", "Невірний пароль"),
+        ("unknown_user", "SomeSecretPass1", "Відсутній юзер"),
+        ("carol_dev", "short", "Короткий пароль"),
+    ]
+    for user, pwd, desc in test_cases:
+        res = "Успішно" if login(user, pwd) else "Відмовлено"
+        print(f"Спроба: {user:<14} ({desc:<22}) -> {res}")
+
+    # Демонстрація генерації та перехоплення помилок валідації/входу
+    print("\nДемонстрація валідації винятків:")
     try:
-        create_users(USERS_TO_REGISTER)
-        db = read_users_db()
-        print(f"[+] Створено записів у CSV: {len(db)}")
+        generate_hash("short", SALT)
+    except ValidationError as e:
+        print(f"[ValidationError перехоплено]: {e}")
 
-        test_cases = [
-            ("alice_admin", "Secur3P@ssw0rd!", "Вірний пароль"),
-            ("bob_analyst", "WrongPassword123", "Невірний пароль"),
-            ("unknown_user", "SomeSecretPass1", "Відсутній юзер"),
-            ("carol_dev", "short", "Короткий пароль"),
-        ]
-        for user, pwd, desc in test_cases:
-            res = "Успішно" if login(user, pwd) else "Відмовлено"
-            print(f"Спроба: {user:<14} ({desc:<22}) -> {res}")
-
-        try:
-            generate_hash("short", SALT)
-        except ValidationError as e:
-            print(f"[ValidationError перехоплено]: {e}")
-
-        try:
-            login("", "")
-        except ValueError as e:
-            print(f"[ValueError перехоплено]: {e}")
-
-    except OSError as err:
-        print(f"[Помилка файлів]: {err}")
+    try:
+        login("", "")
+    except ValueError as e:
+        print(f"[ValueError перехоплено]: {e}")
 
 
 if __name__ == "__main__":
