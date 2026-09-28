@@ -53,7 +53,9 @@ def run_task2() -> None:
     print("\nРезультати перевірки доступу:")
     print("-" * 80)
 
-    all_users = list(USERS.keys()) + [u for u in sorted(BLOCKED_USERS) if u not in USERS]
+    all_users = list(USERS.keys()) + [
+        u for u in sorted(BLOCKED_USERS) if u not in USERS
+    ]
     for user in all_users:
         for res_name, res_lvl in RESOURCES:
             status, reason = check_access(user, res_lvl)

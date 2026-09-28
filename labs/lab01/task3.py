@@ -59,9 +59,7 @@ def log_event(func):
                 "event": "login",
                 "user": user,
                 "result": status,
-                "timestamp": datetime.now(timezone.utc).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                ),
+                "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             }
             try:
                 DATA_DIR.mkdir(parents=True, exist_ok=True)
