@@ -1,136 +1,142 @@
-"""Головний модуль запуску ЛР №2: демонстрація ООП (demo) та аналіз логів (analyze)."""
-
-from __future__ import annotations
+"""Запуск демонстрації ООП та аналізу журналу sudo."""
 
 import argparse
-from datetime import datetime, timezone
+import logging
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from labs.lab02.task1 import Admin, AuditLog, User, UserAccount
+from labs.lab02.task1 import (
+    SESSION_TIMEOUT_SEC,
+    Admin,
+    AuditLog,
+    User,
+    UserAccount,
+)
 from labs.lab02.task2 import analyze_sudo
 
+LOGGER = logging.getLogger(__name__)
 
-def run_demo() -> None:
-    """Демонстраційний сценарій для Завдання 1 (ООП в кібербезпеці)."""
-    print("=" * 65)
-    print(" ДЕМОНСТРАЦІЯ ЗАВДАННЯ 1: СИСТЕМА ОБЛІКОВИХ ЗАПИСІВ ТА АУДИТУ")
-    print("=" * 65)
 
-    print("\n[1] Створення користувача та валідація email:")
-    user = User("ostap_l", "user.sec@example.com")
-    user.set_password("SuperSecret2026!")
-    print(f"Створено користувача: {user}")
+def run_demo():
+    """Продемонструвати роботу класів першого завдання."""
+    user = User("ostap", "ostap_ua@example.com")
+    user.set_password("SafePassword2026!")
 
-    try:
-        print("Спроба встановити некоректний email 'invalid_mail'...")
-        user.email = "invalid_mail"
-    except ValueError as err:
-        print(f"-> Успішно перехоплено ValueError: {err}")
+    audit = AuditLog()
+    account = UserAccount(user, audit_log=audit)
 
-    print("\n[2] Клас Admin та управління правами:")
-    admin = Admin("sysadmin", "admin.audit@corp.ua", permissions=["read_logs"])
-    admin.set_password("AdminRootKey999")
-    print(f"Адміністратор: {admin}")
-    print(f"Чи є дозвіл 'manage_users'?: {admin.has_permission('manage_users')}")
-    print("Надаємо дозвіл 'manage_users'...")
-    admin.grant_permission("manage_users")
-    print(f"Після grant_permission: {admin}")
-
-    print("\n[3] Тестування автентифікації та UserAccount:")
-    shared_audit = AuditLog()
-    account = UserAccount(user, audit_log=shared_audit)
-
-    print("Спроба входу з хибним паролем...")
-    res_fail = account.login("ostap_l", "WrongPassword", ip="192.168.1.50")
+    print("Користувач:", user)
     print(
-        f"-> Результат входу: {res_fail} | Сесія активна: {account.is_authenticated()}"
+        "Успішний вхід:",
+        account.login("ostap", "SafePassword2026!", "192.0.2.10"),
+    )
+    print("Сесія активна:", account.is_authenticated())
+
+    print(
+        "Невдалий вхід:",
+        account.login("ostap", "wrong_password", "192.0.2.10"),
     )
 
-    print("Спроба входу з вірним паролем...")
-    res_ok = account.login("ostap_l", "SuperSecret2026!", ip="192.168.1.50")
-    print(f"-> Результат входу: {res_ok} | Сесія активна: {account.is_authenticated()}")
+    print("\nПеревірка email:")
+    try:
+        user.email = "invalid_email"
+    except ValueError as error:
+        print("Помилка:", error)
 
-    print("\n[4] Доступ через спеціальні методи __getitem__:")
-    print(f"account['user'] : {account['user']}")
-    if account["session"]:
-        print(f"account['session'].ip : {account['session'].ip}")
+    user.email = "ostap_new@example.com"
+    print("Новий email:", user.email)
+
+    print("\nПрава адміністратора:")
+    admin = Admin("admin", "admin_ua@example.com")
+    admin.grant_permission("read_logs")
+    admin.grant_permission("manage_users")
+    print(admin)
+    print("Має manage_users:", admin.has_permission("manage_users"))
+
+    admin.revoke_permission("manage_users")
+    print("Після відкликання:", admin.has_permission("manage_users"))
+
+    print("\nДоступ через ключі:")
+    print(account["user"])
+    account["user"] = user
 
     try:
-        _ = account["password"]
-    except KeyError as err:
-        print(f"-> Захист конфіденційних полів спрацював: {err}")
+        account["session"] = "incorrect_type"
+    except TypeError as error:
+        print("Помилка типу:", error)
 
-    print("\n[5] Перевірка таймауту сесії (імітація завершення часу):")
-    if account.session:
-        account.session.last_activity = datetime(
-            2020, 1, 1, 0, 0, 0, tzinfo=timezone.utc
+    try:
+        print(account["password_hash"])
+    except KeyError as error:
+        print("Захист приватних даних:", error)
+
+    print("\nПеревірка таймауту:")
+    if account.session is not None:
+        account.session.last_activity = datetime.now(timezone.utc) - timedelta(
+            seconds=SESSION_TIMEOUT_SEC + 1
         )
-    print(f"Чи активна сесія після 900+ секунд?: {account.is_authenticated()}")
 
-    print("\n[6] Завершення сесії та AuditLog:")
-    account.login("ostap_l", "SuperSecret2026!", ip="192.168.1.50")
+    print("Сесія активна:", account.is_authenticated())
+
     account.logout()
+    print("Після виходу:", account.is_authenticated())
 
-    print("\n--- Записи AuditLog ---")
-    for log in shared_audit.show_all():
-        ts = log.timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
-        print(f"[{ts}] Користувач: {log.username:<10} | Подія: {log.action}")
-
-    print("\n[+] Демонстрація Завдання 1 завершена успішно.")
+    print("\nЖурнал аудиту:")
+    audit.show_all()
 
 
-def main() -> None:
-    """Головний парсер аргументів CLI."""
-    parser = argparse.ArgumentParser(
-        description="ЛР №2: Консольні утиліти кібербезпеки (Варіант 15)"
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+def build_parser():
+    """Налаштувати аргументи командного рядка."""
+    parser = argparse.ArgumentParser(description="Лабораторна робота №2. Варіант 15.")
+    commands = parser.add_subparsers(dest="command", required=True)
 
-    # Підкоманда demo
-    subparsers.add_parser("demo", help="Запустити демонстрацію Завдання 1 (ООП)")
+    commands.add_parser("demo", help="Демонстрація першого завдання")
+    analyze = commands.add_parser("analyze", help="Аналіз журналу sudo")
 
-    # Підкоманда analyze (Завдання 2)
-    analyze_parser = subparsers.add_parser(
-        "analyze", help="Запустити аудит привілейованих команд (sudo.log)"
-    )
-    analyze_parser.add_argument(
+    analyze.add_argument(
         "--sudo-log",
         type=Path,
         default=Path("labs/lab02/data/data_v15/sudo.log"),
-        help="Шлях до файлу sudo.log",
     )
-    analyze_parser.add_argument(
+    analyze.add_argument(
         "--alert-commands",
-        type=str,
         default="labs/lab02/data/data_v15/alert_commands.txt",
-        help="Шлях до alert_commands.txt або команди через кому",
+        help="Файл правил або список через кому",
     )
-    analyze_parser.add_argument(
+    analyze.add_argument(
         "--out-json",
         type=Path,
         default=Path("labs/lab02/data/sudo_audit_report.json"),
-        help="Шлях для збереження JSON-звіту",
     )
-    analyze_parser.add_argument(
+    analyze.add_argument(
         "--log-level",
-        type=str,
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         default="INFO",
-        help="Рівень логування",
     )
+    return parser
 
-    args = parser.parse_args()
+
+def main():
+    """Запустити вибрану підкоманду."""
+    args = build_parser().parse_args()
 
     if args.command == "demo":
         run_demo()
-    elif args.command == "analyze":
-        analyze_sudo(
-            sudo_log=args.sudo_log,
-            alert_commands=args.alert_commands,
-            out_json=args.out_json,
-            log_level=args.log_level,
-        )
+        return 0
+
+    logging.basicConfig(
+        level=getattr(logging, args.log_level),
+        format="[%(levelname)s] %(message)s",
+    )
+
+    try:
+        analyze_sudo(args.sudo_log, args.alert_commands, args.out_json)
+    except (OSError, ValueError) as error:
+        LOGGER.error("Не вдалося виконати аналіз: %s", error)
+        return 1
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

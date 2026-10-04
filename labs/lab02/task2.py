@@ -1,34 +1,31 @@
-"""Варіант 15: Аудитор логів використання привілейованих команд (Sudo / Privileged Access)."""
+"""Завдання 2. Варіант 15 — аудит журналу sudo."""
 
-from __future__ import annotations
-
-import argparse
 import json
 import logging
 import re
-import sys
+import shlex
 from collections import Counter
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+LOGGER = logging.getLogger(__name__)
+DEFAULT_RULES = "chmod 777,nc,nmap,dd,/etc/shadow"
 
-# Регулярний вираз підтримує ISO 8601 (2026-09-27T08:10:00+03:00) та syslog (Sep 27 08:10:00)
-SUDO_LOG_REGEX = re.compile(
+SUDO_PATTERN = re.compile(
     r"^(?P<timestamp>\S+)\s+"
-    r"(?:\S+\s+)?"  # hostname
-    r"sudo:\s+"
+    r"(?:\S+\s+)?sudo(?:\[\d+\])?:\s*"
     r"(?P<user>\S+)\s*:\s*"
-    r"TTY=(?P<tty>[^;\s]+)\s*;\s*"
-    r"PWD=(?P<pwd>[^;\s]+)\s*;\s*"
-    r"USER=(?P<target_user>[^;\s]+)\s*;\s*"
+    r"TTY=(?P<tty>[^;]+)\s*;\s*"
+    r"PWD=(?P<pwd>[^;]+)\s*;\s*"
+    r"USER=(?P<target_user>[^;]+)\s*;\s*"
     r"COMMAND=(?P<command>.+)$"
 )
 
 
 @dataclass
 class SudoEntry:
-    """Структура розібраного рядка журналу sudo."""
+    """Структура запису журналу sudo."""
 
     timestamp: str
     user: str
@@ -38,210 +35,173 @@ class SudoEntry:
     command: str
 
 
-@dataclass
-class HighRiskAlert:
-    """Структура виявленої підозрілої команди."""
+def load_alert_commands(source):
+    """Завантажити правила з файла або списку через кому."""
+    path = Path(source)
 
-    timestamp: str
-    user: str
-    target_user: str
-    tty: str
-    pwd: str
-    command: str
-    matched_rule: str
-
-
-def load_alert_commands(alert_source: str) -> list[str]:
-    """Завантажити шаблони підозрілих команд із файлу або списку."""
-    path = Path(alert_source)
     if path.is_file():
-        with path.open("r", encoding="utf-8") as f:
-            return [
-                line.strip() for line in f if line.strip() and not line.startswith("#")
-            ]
-    return [item.strip() for item in alert_source.split(",") if item.strip()]
+        rules = [
+            line.strip()
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+    elif (
+        path.suffix.lower() == ".txt"
+        or "/" in source
+        and "," not in source
+        or "\\" in source
+        and "," not in source
+    ):
+        # /etc/shadow також може бути окремим правилом.
+        if source == "/etc/shadow":
+            rules = [source]
+        else:
+            raise FileNotFoundError(f"Файл правил не знайдено: {source}")
+    else:
+        rules = [item.strip() for item in source.split(",") if item.strip()]
+
+    if not rules:
+        raise ValueError("Список правил порожній.")
+
+    return rules
 
 
-def parse_sudo_log(log_path: Path) -> tuple[list[SudoEntry], int]:
-    """Зчитати та розібрати файл логу sudo."""
-    entries: list[SudoEntry] = []
+def parse_sudo_log(path):
+    """Розібрати журнал із часовими мітками ISO 8601."""
+    entries = []
     malformed_lines = 0
 
-    with log_path.open("r", encoding="utf-8", errors="replace") as f:
-        for line_num, line in enumerate(f, start=1):
-            line_clean = line.strip()
-            if not line_clean:
+    with path.open("r", encoding="utf-8") as file:
+        for number, line in enumerate(file, start=1):
+            line = line.strip()
+            if not line:
                 continue
-            match = SUDO_LOG_REGEX.search(line_clean)
-            if match:
-                data = match.groupdict()
-                entries.append(
-                    SudoEntry(
-                        timestamp=data["timestamp"],
-                        user=data["user"],
-                        tty=data["tty"],
-                        pwd=data["pwd"],
-                        target_user=data["target_user"],
-                        command=data["command"].strip(),
-                    )
-                )
-            else:
+
+            match = SUDO_PATTERN.fullmatch(line)
+            if match is None:
                 malformed_lines += 1
-                logger.debug("Рядок %d не розпізнано: %s", line_num, line_clean)
+                LOGGER.warning("Рядок %d має некоректний формат.", number)
+                continue
+
+            data = {key: value.strip() for key, value in match.groupdict().items()}
+
+            try:
+                timestamp = datetime.fromisoformat(data["timestamp"])
+                if timestamp.utcoffset() is None:
+                    raise ValueError("Часова мітка без часового поясу.")
+            except ValueError:
+                malformed_lines += 1
+                LOGGER.warning("Рядок %d містить некоректну дату.", number)
+                continue
+
+            entries.append(SudoEntry(**data))
 
     return entries, malformed_lines
 
 
-def run_audit(log_path: Path, alert_rules: list[str]) -> dict:
-    """Виконати аудит команд та виявити ризиковані запуски."""
-    entries, malformed = parse_sudo_log(log_path)
-    total_commands = len(entries)
-    root_executions = sum(1 for e in entries if e.target_user == "root")
+def matches_rule(command, rule):
+    """Перевірити правило за окремими аргументами команди."""
+    try:
+        tokens = shlex.split(command)
+        rule_tokens = shlex.split(rule)
+    except ValueError:
+        return False
 
-    alerts: list[HighRiskAlert] = []
-    user_command_counter: Counter[str] = Counter()
-    user_risk_counter: Counter[str] = Counter()
+    if not tokens or not rule_tokens:
+        return False
+
+    executable = Path(tokens[0]).name
+
+    # Знаходить також chmod -R 777 та chmod 0777.
+    if rule == "chmod 777":
+        return executable == "chmod" and any(
+            token in {"777", "0777"} for token in tokens[1:]
+        )
+
+    # Назви інструментів перевіряються точно, а не як підрядки.
+    if len(rule_tokens) == 1 and "/" not in rule_tokens[0]:
+        return executable == rule_tokens[0]
+
+    # Шлях на зразок /etc/shadow має бути окремим аргументом.
+    if len(rule_tokens) == 1:
+        return rule_tokens[0] in tokens
+
+    normalized = [executable, *tokens[1:]]
+    rule_tokens[0] = Path(rule_tokens[0]).name
+    length = len(rule_tokens)
+
+    return any(
+        normalized[index : index + length] == rule_tokens
+        for index in range(len(normalized) - length + 1)
+    )
+
+
+def analyze_sudo(sudo_log, alert_commands, out_json):
+    """Виконати аудит і зберегти JSON-звіт."""
+    LOGGER.info("Читання журналу: %s", sudo_log)
+    rules = load_alert_commands(alert_commands)
+    entries, malformed = parse_sudo_log(sudo_log)
+
+    user_counts = Counter()
+    risk_counts = Counter()
+    alerts = []
 
     for entry in entries:
-        user_command_counter[entry.user] += 1
-        cmd = entry.command
+        user_counts[entry.user] += 1
 
-        matched_rule = None
-        for rule in alert_rules:
-            if rule in cmd or re.search(re.escape(rule), cmd, re.IGNORECASE):
-                matched_rule = rule
-                break
-
-        if matched_rule:
-            user_risk_counter[entry.user] += 1
+        matched_rules = [rule for rule in rules if matches_rule(entry.command, rule)]
+        if matched_rules:
+            risk_counts[entry.user] += 1
             alerts.append(
-                HighRiskAlert(
-                    timestamp=entry.timestamp,
-                    user=entry.user,
-                    target_user=entry.target_user,
-                    tty=entry.tty,
-                    pwd=entry.pwd,
-                    command=entry.command,
-                    matched_rule=matched_rule,
-                )
+                {
+                    **asdict(entry),
+                    "matched_rules": matched_rules,
+                }
+            )
+            LOGGER.warning(
+                "%s: %s — правила: %s",
+                entry.user,
+                entry.command,
+                ", ".join(matched_rules),
             )
 
-    return {
-        "total_commands": total_commands,
-        "root_executions": root_executions,
-        "malformed_lines": malformed,
-        "user_command_counts": user_command_counter,
-        "user_risk_counts": user_risk_counter,
+    report = {
+        "summary": {
+            "total_commands": len(entries),
+            "root_executions": sum(entry.target_user == "root" for entry in entries),
+            "malformed_lines": malformed,
+            "high_risk_commands": len(alerts),
+        },
+        "top_users": [
+            {
+                "username": user,
+                "commands": count,
+                "high_risk_count": risk_counts[user],
+            }
+            for user, count in user_counts.most_common()
+        ],
         "alerts": alerts,
     }
 
-
-def analyze_sudo(
-    sudo_log: Path,
-    alert_commands: str,
-    out_json: Path | None = None,
-    log_level: str = "INFO",
-) -> None:
-    """Головна логіка виконання аудиту та генерації звіту."""
-    logging.basicConfig(
-        level=getattr(logging, log_level.upper(), logging.INFO),
-        format="[%(levelname)s] %(message)s",
-    )
-
-    if not sudo_log.exists():
-        logger.error("Файл журналу %s не знайдено!", sudo_log)
-        sys.exit(1)
-
-    logger.info("Parsing sudo usage logs from %s...", sudo_log)
-    rules = load_alert_commands(alert_commands)
-    results = run_audit(sudo_log, rules)
-
-    logger.info(
-        "Processed %s privileged execution entries.", f"{results['total_commands']:,}"
-    )
-
     print("\n=== Privileged Execution Summary ===")
-    print(f"Total Sudo Commands: {results['total_commands']:,}")
-    print(f"Root Executions    : {results['root_executions']:,}")
+    for key, value in report["summary"].items():
+        print(f"{key}: {value}")
 
-    print("\n=== Suspicious / High-Risk Command Executions ===")
-    for alert in results["alerts"]:
-        print(
-            f"[ALERT] User '{alert.user}' executed: 'sudo {alert.command}' on TTY={alert.tty}"
-        )
-        logger.warning(
-            "User '%s' executed suspicious command: %s", alert.user, alert.command
-        )
+    print("\n=== Suspicious Commands ===")
+    for alert in alerts:
+        print(f"[ALERT] {alert['user']}: {alert['command']}")
 
     print("\n=== Top Sudo Users ===")
-    user_counts: Counter[str] = results["user_command_counts"]
-    risk_counts: Counter[str] = results["user_risk_counts"]
+    for item in report["top_users"]:
+        print(
+            f"{item['username']}: {item['commands']} commands "
+            f"(high risk: {item['high_risk_count']})"
+        )
 
-    for idx, (username, count) in enumerate(user_counts.most_common(5), start=1):
-        risks = risk_counts.get(username, 0)
-        risk_suffix = f" (High risk commands: {risks})" if risks > 0 else ""
-        print(f"{idx}. {username:<10}: {count} commands{risk_suffix}")
-
-    if out_json:
-        report_data = {
-            "summary": {
-                "total_commands": results["total_commands"],
-                "root_executions": results["root_executions"],
-                "malformed_lines": results["malformed_lines"],
-            },
-            "top_users": [
-                {"username": u, "commands": c, "high_risk_count": risk_counts.get(u, 0)}
-                for u, c in user_counts.most_common()
-            ],
-            "alerts": [asdict(a) for a in results["alerts"]],
-        }
-        out_json.parent.mkdir(parents=True, exist_ok=True)
-        with out_json.open("w", encoding="utf-8") as f:
-            json.dump(report_data, f, indent=4, ensure_ascii=False)
-        logger.info("Privileged command audit saved to %s", out_json)
-
-
-def build_parser() -> argparse.ArgumentParser:
-    """Створення парсера CLI-аргументів."""
-    parser = argparse.ArgumentParser(
-        description="Аудитор логів використання привілейованих команд (sudo)."
+    out_json.parent.mkdir(parents=True, exist_ok=True)
+    out_json.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False),
+        encoding="utf-8",
     )
-    parser.add_argument(
-        "--sudo-log", type=Path, required=True, help="Шлях до файлу sudo.log"
-    )
-    parser.add_argument(
-        "--alert-commands",
-        type=str,
-        default="chmod 777,nc,nmap,dd,/etc/shadow",
-        help="Шлях до alert_commands.txt або перелік правил через кому",
-    )
-    parser.add_argument(
-        "--out-json",
-        type=Path,
-        default=Path("labs/lab02/data/sudo_audit_report.json"),
-        help="Шлях для збереження JSON-звіту",
-    )
-    parser.add_argument(
-        "--log-level",
-        type=str,
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        default="INFO",
-        help="Рівень деталізації логів",
-    )
-    return parser
-
-
-def main() -> None:
-    """Точка входу для прямого запуску модуля task2."""
-    parser = build_parser()
-    args = parser.parse_args()
-    analyze_sudo(
-        sudo_log=args.sudo_log,
-        alert_commands=args.alert_commands,
-        out_json=args.out_json,
-        log_level=args.log_level,
-    )
-
-
-if __name__ == "__main__":
-    main()
+    LOGGER.info("Звіт збережено: %s", out_json)
+    return report
