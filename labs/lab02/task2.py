@@ -47,10 +47,8 @@ def load_alert_commands(source):
         ]
     elif (
         path.suffix.lower() == ".txt"
-        or "/" in source
-        and "," not in source
-        or "\\" in source
-        and "," not in source
+        or ("/" in source and "," not in source)
+        or ("\\" in source and "," not in source)
     ):
         # /etc/shadow також може бути окремим правилом.
         if source == "/etc/shadow":
@@ -74,10 +72,12 @@ def parse_sudo_log(path):
     with path.open("r", encoding="utf-8") as file:
         for number, line in enumerate(file, start=1):
             line = line.strip()
+
             if not line:
                 continue
 
             match = SUDO_PATTERN.fullmatch(line)
+
             if match is None:
                 malformed_lines += 1
                 LOGGER.warning("Рядок %d має некоректний формат.", number)
@@ -87,8 +87,10 @@ def parse_sudo_log(path):
 
             try:
                 timestamp = datetime.fromisoformat(data["timestamp"])
+
                 if timestamp.utcoffset() is None:
                     raise ValueError("Часова мітка без часового поясу.")
+
             except ValueError:
                 malformed_lines += 1
                 LOGGER.warning("Рядок %d містить некоректну дату.", number)
@@ -139,6 +141,7 @@ def matches_rule(command, rule):
 def analyze_sudo(sudo_log, alert_commands, out_json):
     """Виконати аудит і зберегти JSON-звіт."""
     LOGGER.info("Читання журналу: %s", sudo_log)
+
     rules = load_alert_commands(alert_commands)
     entries, malformed = parse_sudo_log(sudo_log)
 
@@ -150,14 +153,17 @@ def analyze_sudo(sudo_log, alert_commands, out_json):
         user_counts[entry.user] += 1
 
         matched_rules = [rule for rule in rules if matches_rule(entry.command, rule)]
+
         if matched_rules:
             risk_counts[entry.user] += 1
+
             alerts.append(
                 {
                     **asdict(entry),
                     "matched_rules": matched_rules,
                 }
             )
+
             LOGGER.warning(
                 "%s: %s — правила: %s",
                 entry.user,
@@ -184,24 +190,41 @@ def analyze_sudo(sudo_log, alert_commands, out_json):
     }
 
     print("\n=== Privileged Execution Summary ===")
+
     for key, value in report["summary"].items():
         print(f"{key}: {value}")
 
     print("\n=== Suspicious Commands ===")
+
     for alert in alerts:
         print(f"[ALERT] {alert['user']}: {alert['command']}")
 
     print("\n=== Top Sudo Users ===")
+
     for item in report["top_users"]:
         print(
             f"{item['username']}: {item['commands']} commands "
             f"(high risk: {item['high_risk_count']})"
         )
 
-    out_json.parent.mkdir(parents=True, exist_ok=True)
-    out_json.write_text(
-        json.dumps(report, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    LOGGER.info("Звіт збережено: %s", out_json)
+    # Збереження звіту з обробкою файлових помилок.
+    try:
+        out_json.parent.mkdir(parents=True, exist_ok=True)
+
+        out_json.write_text(
+            json.dumps(report, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    except PermissionError as error:
+        raise PermissionError(
+            f"Немає дозволу на збереження звіту: {out_json}"
+        ) from error
+
+    except OSError as error:
+        raise OSError(f"Не вдалося зберегти звіт у файл {out_json}: {error}") from error
+
+    else:
+        LOGGER.info("Звіт збережено: %s", out_json)
+
     return report
