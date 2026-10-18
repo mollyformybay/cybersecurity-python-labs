@@ -3,7 +3,7 @@
 import csv
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
 
@@ -59,7 +59,7 @@ def log_event(func):
                 "event": "login",
                 "user": user,
                 "result": status,
-                "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                "timestamp": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
             }
             try:
                 DATA_DIR.mkdir(parents=True, exist_ok=True)

@@ -2,7 +2,7 @@
 
 import argparse
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from labs.lab02.task1 import (
@@ -72,7 +72,7 @@ def run_demo():
 
     print("\nПеревірка таймауту:")
     if account.session is not None:
-        account.session.last_activity = datetime.now(timezone.utc) - timedelta(
+        account.session.last_activity = datetime.now(UTC) - timedelta(
             seconds=SESSION_TIMEOUT_SEC + 1
         )
 

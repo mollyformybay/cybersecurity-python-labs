@@ -218,3 +218,14 @@ __marimo__/
 .streamlit/secrets.toml
 .venv/
 labs/**/data/
+# Lab 03: keep seed data, ignore working databases
+!labs/lab03/data/
+!labs/lab03/data/seed.json
+
+labs/lab03/data/*.sqlite3
+labs/lab03/data/*.sqlite3-*
+labs/lab03/data/*.db
+labs/lab03/data/*.db-*
+.idea/
+git add .gitignore requirements.txt labs/lab03
+git add labs/lab01/task3.py labs/lab02/main.py labs/lab02/task1.py
