@@ -13,7 +13,7 @@ def payload():
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_sample_is_review_for_variant_15(payload):
+def test_sample_is_other_for_variant_15(payload):
     record = extract_record(payload, "CVE-2099-10001")
     report = build_report(record, "CVE-2099-10001", 15)
     assert report["decision"] == "other"
@@ -43,6 +43,46 @@ def test_wrong_rule_value_is_other(payload):
     ] = "LOW"
     record = extract_record(modified, "CVE-2099-10001")
     assert build_report(record, "CVE-2099-10001", 15)["decision"] == "other"
+
+
+def test_missing_rule_field_is_insufficient(payload):
+    data = payload["vulnerabilities"][0]["cve"]["metrics"]["cvssMetricV31"][0][
+        "cvssData"
+    ]
+    data.pop("attackComplexity")
+    record = extract_record(payload, "CVE-2099-10001")
+    assert build_report(record, "CVE-2099-10001", 15)["decision"] == "insufficient_data"
+
+
+def test_invalid_rule_value_is_error(payload):
+    data = payload["vulnerabilities"][0]["cve"]["metrics"]["cvssMetricV31"][0][
+        "cvssData"
+    ]
+    data["attackComplexity"] = "MEDIUM"
+    record = extract_record(payload, "CVE-2099-10001")
+    with pytest.raises(ValueError):
+        build_report(record, "CVE-2099-10001", 15)
+
+
+@pytest.mark.parametrize("field", ["vulnStatus", "metrics"])
+def test_null_present_top_level_field_is_error(payload, field):
+    payload["vulnerabilities"][0]["cve"][field] = None
+    with pytest.raises(ValueError):
+        extract_record(payload, "CVE-2099-10001")
+
+
+def test_null_present_metric_list_is_error(payload):
+    metrics = payload["vulnerabilities"][0]["cve"]["metrics"]
+    metrics["cvssMetricV31"] = None
+    with pytest.raises(ValueError):
+        extract_record(payload, "CVE-2099-10001")
+
+
+def test_null_present_source_is_error(payload):
+    assessment = payload["vulnerabilities"][0]["cve"]["metrics"]["cvssMetricV31"][0]
+    assessment["source"] = None
+    with pytest.raises(ValueError):
+        extract_record(payload, "CVE-2099-10001")
 
 
 def test_primary_assessment_has_priority(payload):

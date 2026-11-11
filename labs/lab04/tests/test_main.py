@@ -24,3 +24,11 @@ def test_invalid_input_reports_error(capsys):
     code = cli.main(["--cve", "CVE-2099-10001", "--input", "missing.json"])
     assert code == 1
     assert "Помилка читання даних" in capsys.readouterr().err
+
+
+def test_invalid_json_reports_error(tmp_path, capsys):
+    input_path = tmp_path / "invalid.json"
+    input_path.write_text("{invalid", encoding="utf-8")
+    code = cli.main(["--cve", "CVE-2099-10001", "--input", str(input_path)])
+    assert code == 1
+    assert "Помилка читання даних" in capsys.readouterr().err

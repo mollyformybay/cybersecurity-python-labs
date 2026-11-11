@@ -61,9 +61,9 @@ def extract_record(payload: Any, cve_id: str) -> dict[str, Any] | None:
     if cve.get("id") != cve_id:
         raise ValueError("Ідентифікатор CVE у відповіді не збігається із запитом.")
 
-    status = cve.get("vulnStatus")
-    if status is not None:
-        status = _nonempty_string(status, "vulnStatus")
+    status = None
+    if "vulnStatus" in cve:
+        status = _nonempty_string(cve["vulnStatus"], "vulnStatus")
 
     descriptions = cve.get("descriptions", [])
     if not isinstance(descriptions, list):
@@ -85,14 +85,14 @@ def extract_record(payload: Any, cve_id: str) -> dict[str, Any] | None:
     if status is None or status == "Rejected":
         return record
 
-    metrics = cve.get("metrics")
-    if metrics is None:
+    if "metrics" not in cve:
         return record
+    metrics = cve["metrics"]
     if not isinstance(metrics, dict):
         raise ValueError("Поле metrics має бути об'єктом.")  # noqa: TRY004
-    metric_list = metrics.get("cvssMetricV31")
-    if metric_list is None:
+    if "cvssMetricV31" not in metrics:
         return record
+    metric_list = metrics["cvssMetricV31"]
     if not isinstance(metric_list, list):
         raise ValueError("Поле cvssMetricV31 має бути списком.")  # noqa: TRY004
     if not metric_list:
@@ -118,9 +118,9 @@ def extract_record(payload: Any, cve_id: str) -> dict[str, Any] | None:
             _nonempty_string(cvss_data[field], field)
     if "version" in cvss_data and cvss_data["version"] != "3.1":
         raise ValueError("Підтримується лише CVSS версії 3.1.")
-    source = assessment.get("source")
-    if source is not None:
-        source = _nonempty_string(source, "source")
+    source = None
+    if "source" in assessment:
+        source = _nonempty_string(assessment["source"], "source")
     record["assessment"] = {
         "score": score,
         "source": source,

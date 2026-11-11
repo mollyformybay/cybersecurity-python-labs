@@ -24,12 +24,28 @@ python -m labs.lab04.main --cve CVE-2021-44228
 до NVD API; ключ `NVD_API_KEY`, якщо потрібен, передається тільки заголовком.
 Успіх друкує один JSON-звіт у stdout, помилки — коротке повідомлення у stderr.
 
+## Формат звіту
+
+Звіт містить `cve_id`, `variant`, опис, статус NVD, версію CVSS, оцінку,
+джерело, вектор, об'єкт `rule`, фактично спостережене значення `observed` і
+рішення `decision`. `decision` може бути `not_found`, `rejected`,
+`insufficient_data`, `review` або `other`. Відсутні значення подаються як `null`.
+
 ## Перевірки
 
 ```powershell
 python -m pytest labs/lab04/tests -q
 python -m ruff check labs/lab04
 python -m ruff format --check labs/lab04
+```
+
+## Git
+
+```powershell
+git add requirements.txt labs/lab04 .gitignore
+git diff --cached --check
+git commit -m "Complete lab 04 validation and tests"
+git push origin main
 ```
 
 Синтетичний запис має `CVE-2099-10001`, оцінку 9.8 і дає рішення `other` для
