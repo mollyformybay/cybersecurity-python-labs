@@ -221,6 +221,9 @@ labs/**/data/
 # Lab 03: keep seed data, ignore working databases
 !labs/lab03/data/
 !labs/lab03/data/seed.json
+# Lab 04: synthetic API response is part of the assignment
+!labs/lab04/data/
+!labs/lab04/data/nvd_sample.json
 
 labs/lab03/data/*.sqlite3
 labs/lab03/data/*.sqlite3-*
